@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CB Stream Saver</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Doto:wght@400;700&family=Space+Grotesk:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <div id="toast-container"></div>
+
+  <div class="app">
+
+    <header class="header">
+      <div>
+        <h1 class="header__title">CB Stream Saver</h1>
+        <p class="header__subtitle">HLS Stream Downloader</p>
+      </div>
+      <div class="header__status-group">
+        <span class="pulse-dot"></span>
+        <span class="header__status" id="server-status">Connecting...</span>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="card__label">New Download</div>
+      <form id="download-form" class="controls-form" autocomplete="off">
+        <div class="input-group input-group--main">
+          <label for="username">Username</label>
+          <div class="input-wrapper">
+            <span class="input-prefix">@</span>
+            <input type="text" id="username" name="username" placeholder="username" required spellcheck="false" autocorrect="off">
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="format">Format</label>
+          <div class="select-wrapper">
+            <select id="format" name="format">
+              <option value="mp4">MP4</option>
+              <option value="ts">TS</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="max-duration">Max Duration</label>
+          <input type="number" id="max-duration" name="max_duration" placeholder="min" min="1" step="1">
+        </div>
+
+        <button type="submit" class="btn btn--primary" id="btn-start">Start</button>
+      </form>
+    </section>
+
+    <section class="section">
+      <div class="section__header">
+        <span class="live-dot"></span>
+        <h2 class="section__title">Active Downloads</h2>
+        <span class="section__count" id="active-count">0</span>
+        <button class="btn btn--secondary btn--sm section__action" id="btn-stop-all" hidden>Stop All</button>
+      </div>
+      <div id="active-downloads" class="downloads-grid">
+        <div class="empty-state" id="active-empty">[NO ACTIVE DOWNLOADS]</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section__header">
+        <h2 class="section__title">Completed Downloads</h2>
+        <span class="section__count" id="completed-count">0</span>
+      </div>
+      <div id="completed-downloads" class="downloads-list">
+        <div class="empty-state" id="completed-empty">[NO FILES]</div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      CB Stream Saver &mdash; Local &amp; personal use
+    </footer>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

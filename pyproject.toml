@@ -1,0 +1,16 @@
+[project]
+name = "cb-stream-saver"
+version = "0.1.0"
+description = "Chaturbate stream downloader with web UI"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.28.0",
+    "m3u8>=6.0.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+cb-stream-saver = "app:main"
