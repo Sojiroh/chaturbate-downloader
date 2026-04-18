@@ -31,6 +31,7 @@
   const activeEmpty    = $('#active-empty');
   const completedEmpty = $('#completed-empty');
   const activeCount    = $('#active-count');
+  const activeDot      = $('#active-dot');
   const completedCount = $('#completed-count');
   const serverStatus   = $('#server-status');
   const statusDot      = $('.pulse-dot');
@@ -201,6 +202,7 @@
     const count = downloads.length;
     activeCount.textContent = count;
     btnStopAll.hidden = count === 0;
+    activeDot.classList.toggle('is-active', count > 0);
 
     if (count === 0) {
       activeContainer.innerHTML = '';
@@ -247,10 +249,32 @@
     return div;
   }
 
+  function isCardActive(d) {
+    if (d.error_message) return false;
+    if (d.status === 'done' || d.status === 'error') return false;
+    return d.is_live === true || d.status === 'converting' || d.status === 'starting';
+  }
+
+  function setActiveState(card, d) {
+    card.classList.toggle('download-card--active', isCardActive(d));
+  }
+
+  function setFieldText(card, field, newText) {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    if (el.textContent !== newText) {
+      el.textContent = newText;
+      el.classList.remove('stat__value--flash');
+      void el.offsetWidth;
+      el.classList.add('stat__value--flash');
+    }
+  }
+
   function createDownloadCard(d) {
     const card = document.createElement('div');
     card.className = 'download-card';
     card.dataset.username = d.username;
+    setActiveState(card, d);
 
     const fmt = d.output_path ? d.output_path.split('.').pop().toUpperCase() : 'MP4';
 
@@ -306,17 +330,12 @@
   }
 
   function updateDownloadCard(card, d) {
-    const speed = card.querySelector('[data-field="speed"]');
-    if (speed) speed.textContent = (d.speed_mbps || 0).toFixed(2) + ' MB/s';
+    setActiveState(card, d);
 
-    const elapsed = card.querySelector('[data-field="elapsed"]');
-    if (elapsed) elapsed.textContent = formatTime(d.elapsed_seconds);
-
-    const size = card.querySelector('[data-field="size"]');
-    if (size) size.textContent = formatBytes(d.bytes_downloaded);
-
-    const segments = card.querySelector('[data-field="segments"]');
-    if (segments) segments.textContent = `${d.downloaded_segments || 0}/${d.total_segments || 0}`;
+    setFieldText(card, 'speed', (d.speed_mbps || 0).toFixed(2) + ' MB/s');
+    setFieldText(card, 'elapsed', formatTime(d.elapsed_seconds));
+    setFieldText(card, 'size', formatBytes(d.bytes_downloaded));
+    setFieldText(card, 'segments', `${d.downloaded_segments || 0}/${d.total_segments || 0}`);
 
     const liveBadge = card.querySelector('.download-card__live-badge');
     if (liveBadge) {

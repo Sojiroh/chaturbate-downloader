@@ -170,6 +170,11 @@ a {
   background: var(--accent);
   flex-shrink: 0;
   animation: pulse 2s ease-in-out infinite;
+  transition: background 300ms var(--ease);
+}
+
+.live-dot.is-active {
+  background: var(--success);
 }
 
 @keyframes pulse {
@@ -406,15 +411,48 @@ select option {
 
 /* --- Download Card --- */
 .download-card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: var(--space-lg);
+  overflow: hidden;
   transition: border-color 200ms var(--ease);
 }
 
 .download-card:hover {
   border-color: var(--border-visible);
+}
+
+.download-card--active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--text-display) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  animation: cardScanner 2s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes cardScanner {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .download-card--active::before {
+    animation: none;
+    background: var(--border-visible);
+  }
 }
 
 .download-card__header {
@@ -554,6 +592,21 @@ select option {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text-primary);
+}
+
+.stat__value--flash {
+  animation: statFlash 500ms var(--ease);
+}
+
+@keyframes statFlash {
+  0%   { color: var(--text-display); }
+  100% { color: var(--text-primary); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat__value--flash {
+    animation: none;
+  }
 }
 
 .stat--error .stat__label,
