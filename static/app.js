@@ -8,7 +8,7 @@
     stopAll:      '/api/download/stop-all',
     statusAll:    '/api/download/status',
     statusSingle: (username) => `/api/download/status/${encodeURIComponent(username)}`,
-    fileDownload: (username) => `/api/download/file/${encodeURIComponent(username)}`,
+    fileDownload: (filename) => `/api/downloads/file/${encodeURIComponent(filename)}`,
     listFiles:    '/api/downloads/list',
     deleteFile:   (filename)  => `/api/downloads/${encodeURIComponent(filename)}`,
   };
@@ -388,7 +388,7 @@
           </div>
         </div>
         <div class="file-row__actions">
-          ${username ? `<a class="btn btn--ghost btn--sm" href="${API.fileDownload(username)}" download>Download</a>` : ''}
+          ${file.filename ? `<a class="btn btn--ghost btn--sm" href="${API.fileDownload(file.filename)}" download>Download</a>` : ''}
           <button class="btn btn--ghost btn--sm btn-delete" data-filename="${escapeHtml(file.filename || '')}" aria-label="Delete ${escapeHtml(file.filename || '')}">Delete</button>
         </div>
       `;

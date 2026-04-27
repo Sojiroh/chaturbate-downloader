@@ -104,9 +104,8 @@ class HLSDownloader:
         self.refresh_url_callback: Optional[Callable] = None
 
     def stop(self, username: str):
-        event = self._stop_events.get(username)
-        if event:
-            event.set()
+        event = self._stop_events.setdefault(username, asyncio.Event())
+        event.set()
 
     def stop_all(self):
         for event in self._stop_events.values():
@@ -121,8 +120,14 @@ class HLSDownloader:
     ) -> DownloadProgress:
         """Download a live HLS stream with video + audio."""
         progress = DownloadProgress(username=username)
-        stop_event = asyncio.Event()
-        self._stop_events[username] = stop_event
+        stop_event = self._stop_events.setdefault(username, asyncio.Event())
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            current_task.add_done_callback(
+                lambda _task: self._stop_events.pop(username, None)
+                if self._stop_events.get(username) is stop_event
+                else None
+            )
 
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_prefix = f"{username}_{ts}"
@@ -140,6 +145,7 @@ class HLSDownloader:
                 progress.error_message = "No se pudo resolver el playlist de video"
                 progress.status = "error"
                 progress.is_live = False
+                self._stop_events.pop(username, None)
                 if self.on_progress:
                     self.on_progress(progress)
                 return progress
@@ -165,6 +171,7 @@ class HLSDownloader:
                     progress.error_message = f"Playlist inaccesible: {vr}"
                     progress.status = "error"
                     progress.is_live = False
+                    self._stop_events.pop(username, None)
                     if self.on_progress:
                         self.on_progress(progress)
                     return progress

@@ -20,16 +20,18 @@ This project is intended for personal, local use only.
   a regex sweep on the page HTML).
 - **Audio + video muxing** — Chaturbate serves LL-HLS with split video and
   audio playlists. Both tracks are downloaded in parallel and muxed with
-  ffmpeg, including automatic A/V offset correction via `ffprobe`.
+  ffmpeg while preserving source timestamps.
 - **Token refresh on 403** — HLS tokens are single-use and short-lived, so
   the downloader re-extracts the URL on `403` responses (up to 10 refreshes
   per track).
 - **Optional max duration** — cap a download at N minutes.
 - **File management endpoints** — list, download, and delete finished files.
 - **Debug endpoints** — inspect extraction and playlist parsing without
-  committing to a full download.
+  committing to a full download. Token-bearing URLs are redacted in responses.
 - **Path-traversal safe** — all filenames are resolved inside the
   `downloads/` directory.
+- **Local request protection** — state-changing endpoints reject cross-site
+  browser requests and unconfigured origins.
 
 ---
 
@@ -70,7 +72,7 @@ errors), `mux_video_audio` combines them into a single MP4 with
 - **Python 3.10+**
 - **[uv](https://docs.astral.sh/uv/)** for dependency management
 - **ffmpeg** and **ffprobe** on `PATH` (required for final MP4 muxing and
-  A/V offset detection)
+  timestamp/duration diagnostics)
 
 Python dependencies (declared in `pyproject.toml`):
 
@@ -79,6 +81,10 @@ Python dependencies (declared in `pyproject.toml`):
 - `m3u8`
 - `jinja2`
 - `python-multipart`
+
+Development dependencies:
+
+- `pytest`
 
 ---
 
@@ -122,7 +128,7 @@ Then open [http://localhost:8000](http://localhost:8000).
 | -------------- | ------------------------ | --------------------------------------------- |
 | `HOST`         | `127.0.0.1`              | Bind address for uvicorn                      |
 | `PORT`         | `8000`                   | Port                                          |
-| `CORS_ORIGINS` | `http://localhost:8000`  | Comma-separated list of allowed CORS origins  |
+| `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,http://[::1]:8000` | Comma-separated list of allowed UI origins for CORS and state-changing requests |
 
 Example:
 
@@ -136,8 +142,8 @@ HOST=0.0.0.0 PORT=9000 uv run python app.py
 
 The main page (`templates/index.html`) shows three sections:
 
-1. **New Download** — enter a username, pick a format (`mp4` / `ts`), and
-   optionally set a max duration in minutes.
+1. **New Download** — enter a username and optionally set a max duration in
+   minutes. Output is MP4.
 2. **Active Downloads** — live progress cards (segments, speed, elapsed
    time, status) with per-download stop and a global "Stop All" button.
 3. **Completed Downloads** — list of finished files with download and
@@ -160,14 +166,15 @@ All endpoints are under the FastAPI app at `/`.
 | POST   | `/api/download/stop-all`            | Stop all active downloads                      |
 | GET    | `/api/download/status`              | List status of every tracked download          |
 | GET    | `/api/download/status/{username}`   | Status of one download                         |
-| GET    | `/api/download/file/{username}`     | Stream the completed file for `{username}`     |
+| GET    | `/api/download/file/{username}`     | Legacy helper: stream the latest completed file for `{username}` |
 
 ### Files
 
 | Method | Path                         | Description                               |
 | ------ | ---------------------------- | ----------------------------------------- |
-| GET    | `/api/downloads/list`        | List `.mp4` / `.ts` files in `downloads/` |
-| DELETE | `/api/downloads/{filename}`  | Delete a file (path-traversal safe)       |
+| GET    | `/api/downloads/list`             | List completed `.mp4` files in `downloads/` |
+| GET    | `/api/downloads/file/{filename}`  | Stream one exact completed file by filename |
+| DELETE | `/api/downloads/{filename}`       | Delete a completed file (path-traversal safe) |
 
 ### Debug
 
@@ -178,6 +185,10 @@ All endpoints are under the FastAPI app at `/`.
 
 Username validation (`^[a-zA-Z0-9_]{1,50}$`) is applied on every endpoint
 that accepts one.
+
+State-changing endpoints (`POST`/`DELETE`) reject browser cross-site requests
+and origins outside `CORS_ORIGINS`. Keep `CORS_ORIGINS` in sync if you change
+`HOST`/`PORT` or put the UI behind a different local origin.
 
 ---
 
@@ -197,6 +208,8 @@ chaturbate/
 ├── static/
 │   ├── app.js             # Frontend logic (polling, forms, file list)
 │   └── style.css
+├── tests/
+│   └── test_backend.py    # Backend safety/regression tests
 ├── downloads/             # Output directory (gitignored)
 ├── pyproject.toml         # uv / PEP 621 project definition
 ├── setup.sh               # One-shot environment check and install
@@ -209,21 +222,32 @@ chaturbate/
 
 - **Single-use tokens.** Chaturbate's HLS URLs are session-bound. The
   extractor never probes the URL itself — the first HTTP GET must be made
-  by the downloader, or the token gets burned. Do not reuse URLs from the
-  `/api/debug/extract/` endpoint in an external player; they may already
-  be invalid by the time you paste them.
+  by the downloader, or the token gets burned. API responses and logs redact
+  token-bearing URLs where possible.
 - **A/V drift.** Video and audio come from separate HLS playlists and
   occasionally start at slightly different timestamps. `mux_video_audio`
-  probes both with `ffprobe` and applies an `-itsoffset` correction when
-  the delta exceeds ~50 ms.
+  probes both with `ffprobe` for diagnostics and uses `-copyts` /
+  `-start_at_zero` so ffmpeg preserves their relative timestamps.
 - **Mux fallback.** If muxing fails, the video-only file is kept and
   `error_message` is set to `"Mux failed, file is video-only"`.
 - **Graceful stop.** `stop_download` sets an event instead of cancelling
   the task, so the current segment batch finishes and the mux runs before
   the task exits. There's a 120 s watchdog if the task hangs.
-- **No auth.** The server has no authentication layer. Do not expose it
-  to the public internet. The default `HOST` is `127.0.0.1` for this
-  reason.
+- **Local-only security model.** The server is intended for local use. It
+  rejects obvious browser cross-site writes, but it is not a full
+  authentication layer. Do not expose it to the public internet. The default
+  `HOST` is `127.0.0.1` for this reason.
+
+---
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+The current tests cover validation, path/file safety, completed-file listing,
+origin checks, URL redaction, and download-manager start/stop race regressions.
 
 ---
 

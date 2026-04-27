@@ -14,3 +14,8 @@ dependencies = [
 
 [project.scripts]
 cb-stream-saver = "app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

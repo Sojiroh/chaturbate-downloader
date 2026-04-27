@@ -11,6 +11,7 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,17 +27,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global download manager
-manager = DownloadManager()
-
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 DOWNLOADS_DIR = (Path(__file__).parent / "downloads").resolve()
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
+# Global download manager
+manager = DownloadManager(output_dir=DOWNLOADS_DIR)
+
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{1,50}$")
 
-ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8000").split(",")
+ALLOWED_ORIGIN_SET = {
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000,http://[::1]:8000",
+    ).split(",")
+    if origin.strip()
+}
+ALLOWED_ORIGINS = sorted(ALLOWED_ORIGIN_SET)
 
 
 def _validate_username(username: str) -> str:
@@ -53,6 +62,45 @@ def _safe_downloads_path(filename: str) -> Path:
     if not file_path.is_relative_to(DOWNLOADS_DIR):
         raise HTTPException(status_code=400, detail="Invalid filename")
     return file_path
+
+
+def _is_completed_media_file(path: Path) -> bool:
+    """Return True for user-facing completed media outputs only."""
+    return (
+        path.is_file()
+        and path.suffix == ".mp4"
+        and not path.stem.endswith(("_video", "_audio"))
+    )
+
+
+def _redact_url(url: Optional[str]) -> Optional[str]:
+    """Strip query/fragment token material before returning debug data."""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    query = "…" if parts.query else ""
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def _redact_text_urls(text: str) -> str:
+    """Redact query strings from any URLs embedded in debug text."""
+    redacted = re.sub(
+        r"https?://[^\s\"'<>]+",
+        lambda match: _redact_url(match.group(0)) or "",
+        text,
+    )
+    return re.sub(r"([^#\s\"'<>?]+)\?[^\s\"'<>]+", r"\1?…", redacted)
+
+
+def _require_trusted_origin(request: Request) -> None:
+    """Reject browser cross-site state-changing requests to localhost."""
+    sec_fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if sec_fetch_site == "cross-site":
+        raise HTTPException(status_code=403, detail="Cross-site requests are not allowed")
+
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") not in ALLOWED_ORIGIN_SET:
+        raise HTTPException(status_code=403, detail="Origin is not allowed")
 
 
 @asynccontextmanager
@@ -93,14 +141,16 @@ async def index():
 
 @app.post("/api/download/start")
 async def start_download(
+    request: Request,
     username: str,
     output_format: str = "mp4",
     max_duration: Optional[int] = None,
 ):
     """Start downloading a stream."""
+    _require_trusted_origin(request)
     username = _validate_username(username)
-    if output_format not in ("mp4", "ts"):
-        raise HTTPException(status_code=400, detail="Format must be 'mp4' or 'ts'")
+    if output_format != "mp4":
+        raise HTTPException(status_code=400, detail="Format must be 'mp4'")
     if max_duration is not None and max_duration <= 0:
         raise HTTPException(status_code=400, detail="max_duration must be positive")
     # Convert minutes (from UI) to seconds for the backend
@@ -116,8 +166,9 @@ async def start_download(
 
 
 @app.post("/api/download/stop/{username}")
-async def stop_download(username: str):
+async def stop_download(request: Request, username: str):
     """Stop a specific download."""
+    _require_trusted_origin(request)
     username = _validate_username(username)
     result = await manager.stop_download(username)
     if "error" in result:
@@ -126,8 +177,9 @@ async def stop_download(username: str):
 
 
 @app.post("/api/download/stop-all")
-async def stop_all():
+async def stop_all(request: Request):
     """Stop all active downloads."""
+    _require_trusted_origin(request)
     return await manager.stop_all()
 
 
@@ -156,17 +208,16 @@ async def download_file(username: str):
     status = manager.get_download(username)
     if status and status.get("output_path"):
         file_path = Path(status["output_path"]).resolve()
-        if file_path.is_relative_to(DOWNLOADS_DIR) and file_path.exists():
-            media_type = "video/mp4" if file_path.suffix == ".mp4" else "video/MP2T"
+        if file_path.is_relative_to(DOWNLOADS_DIR) and _is_completed_media_file(file_path):
             return FileResponse(
                 path=str(file_path),
-                media_type=media_type,
+                media_type="video/mp4",
                 filename=file_path.name,
             )
 
     # Fallback: scan downloads directory for any file starting with username_
     for f in sorted(DOWNLOADS_DIR.iterdir(), reverse=True):
-        if f.is_file() and f.name.startswith(f"{username}_") and f.suffix == ".mp4":
+        if _is_completed_media_file(f) and f.name.startswith(f"{username}_"):
             return FileResponse(
                 path=str(f),
                 media_type="video/mp4",
@@ -176,12 +227,25 @@ async def download_file(username: str):
     raise HTTPException(status_code=404, detail="File not found")
 
 
+@app.get("/api/downloads/file/{filename}")
+async def download_file_by_name(filename: str):
+    """Download an exact completed filename."""
+    file_path = _safe_downloads_path(filename)
+    if not file_path.exists() or not _is_completed_media_file(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        path=str(file_path),
+        media_type="video/mp4",
+        filename=file_path.name,
+    )
+
+
 @app.get("/api/downloads/list")
 async def list_downloaded_files():
     """List all downloaded files."""
     files = []
     for f in DOWNLOADS_DIR.iterdir():
-        if f.is_file() and f.suffix in (".mp4", ".ts"):
+        if _is_completed_media_file(f):
             stem = f.stem
             username = stem.rsplit("_20", 1)[0] if "_20" in stem else stem
             st = f.stat()
@@ -198,10 +262,11 @@ async def list_downloaded_files():
 
 
 @app.delete("/api/downloads/{filename}")
-async def delete_file(filename: str):
+async def delete_file(request: Request, filename: str):
     """Delete a downloaded file."""
+    _require_trusted_origin(request)
     file_path = _safe_downloads_path(filename)
-    if not file_path.exists() or not file_path.is_file():
+    if not file_path.exists() or not _is_completed_media_file(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     file_path.unlink()
     return {"status": "deleted", "filename": filename}
@@ -234,7 +299,7 @@ async def debug_extract(username: str):
 
     return {
         "username": username,
-        "hls_url": url,
+        "hls_url": _redact_url(url),
         "found": url is not None,
         "logs": logs,
     }
@@ -282,10 +347,10 @@ async def debug_playlist(username: str):
 
             result = {
                 "username": username,
-                "hls_url": hls_url,
+                "hls_url": _redact_url(hls_url),
                 "master_status": master_status,
                 "master_is_variant": is_variant,
-                "master_content": master_body[:3000],
+                "master_content": _redact_text_urls(master_body[:3000]),
                 "master_content_length": len(master_body),
             }
 
@@ -297,7 +362,7 @@ async def debug_playlist(username: str):
                         var_url = urljoin(hls_url, var_url)
                     variants.append(
                         {
-                            "uri": var_url,
+                            "uri": _redact_url(var_url),
                             "bandwidth": p.stream_info.bandwidth,
                             "resolution": str(p.stream_info.resolution)
                             if p.stream_info.resolution
@@ -314,14 +379,14 @@ async def debug_playlist(username: str):
                 if not best_url.startswith("http"):
                     best_url = urljoin(hls_url, best_url)
 
-                result["selected_variant_url"] = best_url
+                result["selected_variant_url"] = _redact_url(best_url)
 
                 resp2 = await client.get(best_url)
                 variant_body = resp2.text
                 variant_playlist = m3u8.loads(variant_body)
 
                 result["variant_status"] = resp2.status_code
-                result["variant_content"] = variant_body[:5000]
+                result["variant_content"] = _redact_text_urls(variant_body[:5000])
                 result["variant_content_length"] = len(variant_body)
                 result["variant_segment_count"] = len(variant_playlist.segments)
                 result["variant_has_segment_map"] = bool(variant_playlist.segment_map)
@@ -333,7 +398,7 @@ async def debug_playlist(username: str):
                     seg_url = s.uri or ""
                     if seg_url and not seg_url.startswith("http"):
                         seg_url = urljoin(best_url, seg_url)
-                    segs.append({"uri": seg_url[:150], "duration": s.duration})
+                    segs.append({"uri": _redact_url(seg_url), "duration": s.duration})
                 result["first_segments"] = segs
 
             elif master_playlist.segments:
@@ -343,7 +408,7 @@ async def debug_playlist(username: str):
                     seg_url = s.uri or ""
                     if seg_url and not seg_url.startswith("http"):
                         seg_url = urljoin(hls_url, seg_url)
-                    segs.append({"uri": seg_url[:150], "duration": s.duration})
+                    segs.append({"uri": _redact_url(seg_url), "duration": s.duration})
                 result["first_segments"] = segs
             else:
                 result["no_segments_found"] = True
