@@ -11,7 +11,7 @@
 </head>
 <body>
 
-  <div id="toast-container"></div>
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
 
   <div class="app">
 
@@ -37,13 +37,9 @@
           </div>
         </div>
 
-        <div class="input-group">
-          <label for="format">Format</label>
-          <div class="select-wrapper">
-            <select id="format" name="format">
-              <option value="mp4">MP4</option>
-            </select>
-          </div>
+        <div class="input-group input-group--format" aria-label="Output format">
+          <span class="field-label">Format</span>
+          <span class="format-pill">MP4 only</span>
         </div>
 
         <div class="input-group">
@@ -63,7 +59,10 @@
         <button class="btn btn--secondary btn--sm section__action" id="btn-stop-all" hidden>Stop All</button>
       </div>
       <div id="active-downloads" class="downloads-grid">
-        <div class="empty-state" id="active-empty">[NO ACTIVE DOWNLOADS]</div>
+        <div class="empty-state" id="active-empty">
+          <strong>[READY]</strong>
+          <span>Start with a username above. Live recordings show status and activity while capture or conversion is running.</span>
+        </div>
       </div>
     </section>
 
@@ -73,7 +72,10 @@
         <span class="section__count" id="completed-count">0</span>
       </div>
       <div id="completed-downloads" class="downloads-list">
-        <div class="empty-state" id="completed-empty">[NO FILES]</div>
+        <div class="empty-state" id="completed-empty">
+          <strong>[LOCAL LIBRARY EMPTY]</strong>
+          <span>Finished MP4 files will appear here and are saved locally in this app’s downloads folder.</span>
+        </div>
       </div>
     </section>
 

@@ -22,7 +22,6 @@
 
   const form           = $('#download-form');
   const inputUser      = $('#username');
-  const selectFormat   = $('#format');
   const inputDuration  = $('#max-duration');
   const btnStart       = $('#btn-start');
   const btnStopAll     = $('#btn-stop-all');
@@ -36,6 +35,7 @@
   const serverStatus   = $('#server-status');
   const statusDot      = $('.pulse-dot');
   const toastContainer = $('#toast-container');
+  const OUTPUT_FORMAT = 'mp4';
 
   // --- Toast ---
   function toast(message, type = 'info', duration = 4000) {
@@ -43,17 +43,37 @@
 
     const el = document.createElement('div');
     el.className = `toast toast--${type}`;
+    el.setAttribute('role', type === 'error' ? 'alert' : 'status');
     el.innerHTML = `
       <span class="toast__prefix">${prefixes[type] || prefixes.info}</span>
       <span class="toast__message">${escapeHtml(message)}</span>
       <button class="toast__close" aria-label="Close">&times;</button>
     `;
 
-    el.querySelector('.toast__close').addEventListener('click', () => removeToast(el));
+    const close = el.querySelector('.toast__close');
+    close.addEventListener('click', () => removeToast(el));
+    el.addEventListener('mouseenter', () => pauseToast(el));
+    el.addEventListener('mouseleave', () => resumeToast(el));
+    el.addEventListener('focusin', () => pauseToast(el));
+    el.addEventListener('focusout', () => resumeToast(el));
     toastContainer.appendChild(el);
 
-    const timer = setTimeout(() => removeToast(el), duration);
-    el._timer = timer;
+    el._remaining = duration;
+    el._startedAt = Date.now();
+    el._timer = setTimeout(() => removeToast(el), duration);
+  }
+
+  function pauseToast(el) {
+    if (el._removed || !el._timer) return;
+    clearTimeout(el._timer);
+    el._timer = null;
+    el._remaining -= Date.now() - el._startedAt;
+  }
+
+  function resumeToast(el) {
+    if (el._removed || el._timer) return;
+    el._startedAt = Date.now();
+    el._timer = setTimeout(() => removeToast(el), Math.max(1200, el._remaining));
   }
 
   function removeToast(el) {
@@ -122,12 +142,16 @@
 
   // --- Stop Download ---
   async function stopDownload(username) {
+    const btn = findButtonByData(activeContainer, '.btn-stop', 'username', username);
     try {
+      setButtonLoading(btn, '[STOPPING...]');
       await apiCall(API.stop(username), { method: 'POST' });
       toast(`Download stopped: @${username}`, 'info');
       fetchStatus();
     } catch (err) {
       toast(`Failed to stop: ${err.message}`, 'error');
+    } finally {
+      clearButtonLoading(btn);
     }
   }
 
@@ -136,6 +160,7 @@
     if (!confirm('Stop all active downloads?')) return;
     try {
       btnStopAll.disabled = true;
+      btnStopAll.textContent = '[STOPPING...]';
       await apiCall(API.stopAll, { method: 'POST' });
       toast('All downloads stopped', 'info');
       fetchStatus();
@@ -143,18 +168,43 @@
       toast(`Error: ${err.message}`, 'error');
     } finally {
       btnStopAll.disabled = false;
+      btnStopAll.textContent = 'Stop All';
     }
   }
 
   // --- Delete File ---
   async function deleteFile(filename) {
+    const btn = findButtonByData(completedContainer, '.btn-delete', 'filename', filename);
     try {
+      setButtonLoading(btn, '[DELETING...]');
       await apiCall(API.deleteFile(filename), { method: 'DELETE' });
       toast(`File deleted: ${filename}`, 'success');
       fetchFiles();
     } catch (err) {
       toast(`Failed to delete: ${err.message}`, 'error');
+      clearButtonLoading(btn);
+      resetDeleteButton(btn, filename);
     }
+  }
+
+  function findButtonByData(root, selector, key, value) {
+    return Array.from(root.querySelectorAll(selector)).find(btn => btn.dataset[key] === value) || null;
+  }
+
+  function setButtonLoading(btn, label) {
+    if (!btn) return;
+    btn.dataset.originalText = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+    btn.textContent = label;
+  }
+
+  function clearButtonLoading(btn) {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+    btn.textContent = btn.dataset.originalText || btn.textContent;
+    delete btn.dataset.originalText;
   }
 
   // --- Fetch Status ---
@@ -167,9 +217,9 @@
       setServerOnline(true);
 
       const allDownloads = Array.isArray(data) ? data : [];
-      const visible = allDownloads.filter(d => d.active || d.error_message || d.elapsed_seconds < 30);
+      const visible = allDownloads.filter(d => d.active || d.error_message || d.status === 'error' || d.elapsed_seconds < 30);
       const actives = allDownloads.filter(d => d.active);
-      renderActiveDownloads(visible.length > 0 ? visible : actives);
+      renderActiveDownloads(visible.length > 0 ? visible : actives, actives.length);
 
     } catch {
       setServerOnline(false);
@@ -198,13 +248,13 @@
   }
 
   // --- Render Active Downloads ---
-  function renderActiveDownloads(downloads) {
-    const count = downloads.length;
+  function renderActiveDownloads(downloads, activeTotal = downloads.filter(d => d.active).length) {
+    const count = activeTotal;
     activeCount.textContent = count;
     btnStopAll.hidden = count === 0;
     activeDot.classList.toggle('is-active', count > 0);
 
-    if (count === 0) {
+    if (downloads.length === 0) {
       activeContainer.innerHTML = '';
       activeContainer.appendChild(activeEmpty || createEmptyActive());
       activeDownloads = {};
@@ -245,11 +295,12 @@
     const div = document.createElement('div');
     div.className = 'empty-state';
     div.id = 'active-empty';
-    div.textContent = '[NO ACTIVE DOWNLOADS]';
+    div.innerHTML = '<strong>[READY]</strong><span>Start with a username above. Live recordings show status and activity while capture or conversion is running.</span>';
     return div;
   }
 
   function isCardActive(d) {
+    if (d.active === true) return true;
     if (d.error_message) return false;
     if (d.status === 'done' || d.status === 'error') return false;
     return d.is_live === true || d.status === 'converting' || d.status === 'starting';
@@ -259,15 +310,55 @@
     card.classList.toggle('download-card--active', isCardActive(d));
   }
 
-  function setFieldText(card, field, newText) {
+  function setFieldText(card, field, newText, flash = true) {
     const el = card.querySelector(`[data-field="${field}"]`);
     if (!el) return;
     if (el.textContent !== newText) {
       el.textContent = newText;
-      el.classList.remove('stat__value--flash');
-      void el.offsetWidth;
-      el.classList.add('stat__value--flash');
+      if (flash) {
+        el.classList.remove('stat__value--flash');
+        void el.offsetWidth;
+        el.classList.add('stat__value--flash');
+      }
     }
+  }
+
+  function getStatusLabel(d) {
+    const status = String(d.status || '').toLowerCase();
+    if (d.error_message || status === 'error') return 'ERROR';
+    if (status === 'done' || status === 'completed' || status === 'complete') return 'DONE';
+    if (status === 'converting' || status === 'muxing' || status === 'processing') return 'CONVERTING';
+    if (isCardActive(d)) return 'RECORDING';
+    return String(d.status || 'RECENT').toUpperCase();
+  }
+
+  function getStatusClass(label) {
+    return String(label).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  }
+
+  function statusStripMarkup(d) {
+    const active = isCardActive(d);
+    const label = getStatusLabel(d);
+    const statusClass = getStatusClass(label);
+    return `
+      <div class="status-strip ${active ? 'status-strip--active' : 'status-strip--idle'} status-strip--${statusClass}" data-field="status-strip" role="status" aria-live="polite" aria-label="Download status for ${escapeHtml(d.username)}: ${escapeHtml(label)}">
+        <span class="status-strip__label" data-field="status-label">${escapeHtml(label)}</span>
+        <div class="status-strip__track" aria-hidden="true">
+          <div class="status-strip__signal"></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function updateStatusStrip(card, d) {
+    const wrap = card.querySelector('[data-field="status-strip"]');
+    const label = card.querySelector('[data-field="status-label"]');
+    if (!wrap || !label) return;
+    const active = isCardActive(d);
+    const statusLabel = getStatusLabel(d);
+    wrap.className = `status-strip ${active ? 'status-strip--active' : 'status-strip--idle'} status-strip--${getStatusClass(statusLabel)}`;
+    wrap.setAttribute('aria-label', `Download status for ${d.username}: ${statusLabel}`);
+    label.textContent = statusLabel;
   }
 
   function createDownloadCard(d) {
@@ -277,6 +368,7 @@
     setActiveState(card, d);
 
     const fmt = d.output_path ? d.output_path.split('.').pop().toUpperCase() : 'MP4';
+    const live = isCardActive(d) && d.is_live;
 
     card.innerHTML = `
       <div class="download-card__header">
@@ -284,14 +376,15 @@
           <div class="download-card__name">@${escapeHtml(d.username)}</div>
           <div class="download-card__tags">
             <span class="tag">${escapeHtml(fmt)}</span>
-            <span class="download-card__live-badge ${d.is_live ? 'is-live' : 'is-offline'}">
+            <span class="download-card__live-badge ${live ? 'is-live' : 'is-offline'}">
               <span class="mini-dot"></span>
-              ${d.is_live ? 'LIVE' : 'OFFLINE'}
+              ${live ? 'LIVE' : 'OFFLINE'}
             </span>
           </div>
         </div>
-        <button class="btn btn--destructive btn--sm btn-stop" data-username="${escapeHtml(d.username)}" aria-label="Stop download for ${escapeHtml(d.username)}">Stop</button>
+        ${d.active ? `<button class="btn btn--destructive btn--sm btn-stop" data-username="${escapeHtml(d.username)}" aria-label="Stop download for ${escapeHtml(d.username)}">Stop</button>` : `<span class="tag tag--muted">${escapeHtml(String(d.status || 'recent').toUpperCase())}</span>`}
       </div>
+      ${statusStripMarkup(d)}
       <div class="download-card__stats">
         <div class="stat">
           <span class="stat__label">Speed</span>
@@ -321,7 +414,7 @@
       ` : ''}
     `;
 
-    card.querySelector('.btn-stop').addEventListener('click', (e) => {
+    card.querySelector('.btn-stop')?.addEventListener('click', (e) => {
       const user = e.currentTarget.dataset.username;
       stopDownload(user);
     });
@@ -331,16 +424,26 @@
 
   function updateDownloadCard(card, d) {
     setActiveState(card, d);
+    updateStatusStrip(card, d);
 
-    setFieldText(card, 'speed', (d.speed_mbps || 0).toFixed(2) + ' MB/s');
-    setFieldText(card, 'elapsed', formatTime(d.elapsed_seconds));
-    setFieldText(card, 'size', formatBytes(d.bytes_downloaded));
+    setFieldText(card, 'speed', (d.speed_mbps || 0).toFixed(2) + ' MB/s', false);
+    setFieldText(card, 'elapsed', formatTime(d.elapsed_seconds), false);
+    setFieldText(card, 'size', formatBytes(d.bytes_downloaded), false);
     setFieldText(card, 'segments', `${d.downloaded_segments || 0}/${d.total_segments || 0}`);
+
+    const header = card.querySelector('.download-card__header');
+    const action = header?.querySelector('.btn-stop, .tag--muted');
+    if (header && ((d.active && !action?.classList.contains('btn-stop')) || (!d.active && !action?.classList.contains('tag--muted')))) {
+      action?.remove();
+      header.insertAdjacentHTML('beforeend', d.active ? `<button class="btn btn--destructive btn--sm btn-stop" data-username="${escapeHtml(d.username)}" aria-label="Stop download for ${escapeHtml(d.username)}">Stop</button>` : `<span class="tag tag--muted">${escapeHtml(String(d.status || 'recent').toUpperCase())}</span>`);
+      header.querySelector('.btn-stop')?.addEventListener('click', (e) => stopDownload(e.currentTarget.dataset.username));
+    }
 
     const liveBadge = card.querySelector('.download-card__live-badge');
     if (liveBadge) {
-      liveBadge.className = `download-card__live-badge ${d.is_live ? 'is-live' : 'is-offline'}`;
-      liveBadge.innerHTML = `<span class="mini-dot"></span> ${d.is_live ? 'LIVE' : 'OFFLINE'}`;
+      const live = isCardActive(d) && d.is_live;
+      liveBadge.className = `download-card__live-badge ${live ? 'is-live' : 'is-offline'}`;
+      liveBadge.innerHTML = `<span class="mini-dot"></span> ${live ? 'LIVE' : 'OFFLINE'}`;
     }
 
     let errorEl = card.querySelector('[data-field="error"]');
@@ -374,7 +477,6 @@
       const row = document.createElement('div');
       row.className = 'file-row';
 
-      const ext = (file.format || '').toUpperCase();
       const sizeStr = file.size ? formatBytes(file.size) : '—';
       const username = file.username || '';
 
@@ -383,21 +485,20 @@
           <div class="file-row__name">${escapeHtml(file.filename || 'File')}</div>
           <div class="file-row__details">
             <span>${sizeStr}</span>
-            <span>${ext}</span>
+            <span>MP4</span>
             ${username ? `<span>@${escapeHtml(username)}</span>` : ''}
+            <span>Local downloads folder</span>
           </div>
         </div>
         <div class="file-row__actions">
           ${file.filename ? `<a class="btn btn--ghost btn--sm" href="${API.fileDownload(file.filename)}" download>Download</a>` : ''}
-          <button class="btn btn--ghost btn--sm btn-delete" data-filename="${escapeHtml(file.filename || '')}" aria-label="Delete ${escapeHtml(file.filename || '')}">Delete</button>
+          <button class="btn btn--danger-ghost btn--sm btn-delete" data-filename="${escapeHtml(file.filename || '')}" aria-label="Delete ${escapeHtml(file.filename || '')}">Delete</button>
         </div>
       `;
 
       row.querySelector('.btn-delete').addEventListener('click', (e) => {
         const fname = e.currentTarget.dataset.filename;
-        if (confirm(`Delete "${fname}"?`)) {
-          deleteFile(fname);
-        }
+        armDeleteButton(e.currentTarget, fname);
       });
 
       completedContainer.appendChild(row);
@@ -408,8 +509,30 @@
     const div = document.createElement('div');
     div.className = 'empty-state';
     div.id = 'completed-empty';
-    div.textContent = '[NO FILES]';
+    div.innerHTML = '<strong>[LOCAL LIBRARY EMPTY]</strong><span>Finished MP4 files will appear here and are saved locally in this app’s downloads folder.</span>';
     return div;
+  }
+
+  function armDeleteButton(btn, filename) {
+    if (!filename || btn.disabled) return;
+    if (btn.dataset.confirming === 'true') {
+      clearTimeout(btn._confirmTimer);
+      deleteFile(filename);
+      return;
+    }
+    btn.dataset.confirming = 'true';
+    btn.classList.add('is-confirming');
+    btn.textContent = 'Confirm delete';
+    btn.setAttribute('aria-label', `Confirm delete ${filename}`);
+    btn._confirmTimer = setTimeout(() => resetDeleteButton(btn, filename), 3500);
+  }
+
+  function resetDeleteButton(btn, filename) {
+    if (!btn) return;
+    btn.dataset.confirming = 'false';
+    btn.classList.remove('is-confirming');
+    btn.textContent = 'Delete';
+    btn.setAttribute('aria-label', `Delete ${filename || btn.dataset.filename || ''}`);
   }
 
   // --- Polling ---
@@ -437,7 +560,7 @@
       inputUser.focus();
       return;
     }
-    const format = selectFormat.value || 'mp4';
+    const format = OUTPUT_FORMAT;
     const maxDuration = inputDuration.value ? inputDuration.value : null;
     startDownload(username, format, maxDuration);
   });
